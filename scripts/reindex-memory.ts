@@ -127,13 +127,34 @@ async function main(): Promise<number> {
 
   const lines = ['path\tid\ttype\ttags\tcreated\tsummary'];
   for (const e of entries) {
-    lines.push(
-      [e.path, e.id, e.type, e.tags.join(','), e.created, e.summary].join('\t'),
-    );
+    lines.push([e.path, e.id, e.type, e.tags.join(','), e.created, e.summary].join('\t'));
   }
   lines.push('');
   await Bun.write(OUT, lines.join('\n'));
   console.log(`reindex-memory: indexed ${entries.length} entries → ${OUT}`);
+
+  if (process.env.MEMORY_REINDEX_CHECK === '1') {
+    const status = Bun.spawnSync({
+      cmd: ['git', 'status', '--porcelain', '--', '.agents/memory/index.tsv'],
+      cwd: REPO_ROOT,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    if (status.exitCode !== 0) {
+      console.error(new TextDecoder().decode(status.stderr));
+      return 2;
+    }
+    const dirty = new TextDecoder().decode(status.stdout).trim();
+    if (dirty.length > 0) {
+      console.error(
+        '\nreindex-memory: .agents/memory/index.tsv is out of date with source entries.\n' +
+          'Run `bun run memory:reindex` and commit the result.\n' +
+          dirty,
+      );
+      return 2;
+    }
+  }
+
   return 0;
 }
 

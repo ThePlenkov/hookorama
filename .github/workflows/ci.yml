@@ -15,5 +15,3 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run CI gates
         run: bun run ci
-      - name: Smoke — memory reindex
-        run: bun run memory:reindex
