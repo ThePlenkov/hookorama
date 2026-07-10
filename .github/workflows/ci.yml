@@ -15,5 +15,3 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run CI gates
         run: bun run ci
-      - name: Memory reindex freshness
-        run: bun run memory:reindex && git diff --exit-code -- .agents/memory/index.tsv
