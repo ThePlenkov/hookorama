@@ -1,0 +1,2 @@
+path	id	type	tags	created	summary
+.agents/memory/lessons/pr-fixup-errors-must-restate-in-body.md	pr-fixup-errors-must-restate-in-body	lesson	pr-fixup,ci,bead-format	2026-07-10	PR-fixup beads must restate CI errors verbatim in the body; polecats miss errors that arrive only as PR annotations.

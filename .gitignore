@@ -10,9 +10,6 @@ tmp/
 # agent plans (worktree-local, never tracked)
 .kilo/
 
-# generated memory index (rebuilt by `bun run memory:reindex`)
-.agents/memory/index.tsv
-
 # os
 .DS_Store
 Thumbs.db
