@@ -42,15 +42,15 @@ Every tracked `.md` file (other than those in the explicit allowlist below) must
 
 ## 3. Role boundary — do not cross the categories
 
-| Category | Path(s) | What lives here | What does NOT live here |
-|---|---|---|---|
-| **Agent contract** | `AGENTS.md` (root) | The rules every agent must follow. Invariants. Read-first order. Common traps. | Procedures, tutorials, "how to use bun". |
-| **Skills** | `.agents/skills/<name>/SKILL.md` | Procedures for recurring tasks. Activated by name when relevant. | Hard invariants (those are in `AGENTS.md`); product-specific facts (those are in memory or in the relevant ADR). |
-| **Rules** | `.agents/rules/<file>.md.rule` | One rule per tracked `.md` file: what `appliesTo` (path glob), what `purpose`. Enforced by `bun run check:md`. | Reasoning behind the rule (that's in `AGENTS.md` or the relevant skill). |
-| **Memory** | `.agents/memory/{facts,retros,lessons}/*.md` + `index.tsv` | Facts we learned, retros on mistakes, lessons that change behaviour. Frontmatter with `id`, `type`, `tags`, `created`, `summary`. | Decisions about the product (those are ADRs). |
-| **ADRs** | `docs/adr/NNNN-<slug>.md` | **Product / architecture decisions about a component or a feature.** When we add the supervisor, an ADR pins its shape; when we add the wire protocol, an ADR pins its frames; when we add analytics, an ADR pins the adoption-score formula. Each ADR cites its memory facts. | Tooling (bun/tsdown/vitest — in `package.json` + `tsdown.config.ts` + `AGENTS.md`); processes (in skills); invariants (in `AGENTS.md`); code style (in `.oxlintrc.json` + `.prettierrc.json`). |
-| **`SPEC.md`** (PR 2+) | repo root | **Component index** — one row per component of Hookorama, pointing at the package, the ADRs that pin its shape, the rules that govern its `.md`, the skills that touch it, and the memory facts it relies on. | Detailed component description (that lives in the ADR + the package's `README.md`); FR/NFR inventories (those live in the relevant ADR); build / process docs (in `AGENTS.md` and skills). |
-| **`ROADMAP.md`** (PR 2+) | repo root | Ordered list of phases. Each phase row cites the ADRs it ships and the components it activates. | A spec for any component (those live in ADRs and `SPEC.md`). |
+| Category                 | Path(s)                                                    | What lives here                                                                                                                                                                                                                                                                | What does NOT live here                                                                                                                                                                        |
+| ------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Agent contract**       | `AGENTS.md` (root)                                         | The rules every agent must follow. Invariants. Read-first order. Common traps.                                                                                                                                                                                                 | Procedures, tutorials, "how to use bun".                                                                                                                                                       |
+| **Skills**               | `.agents/skills/<name>/SKILL.md`                           | Procedures for recurring tasks. Activated by name when relevant.                                                                                                                                                                                                               | Hard invariants (those are in `AGENTS.md`); product-specific facts (those are in memory or in the relevant ADR).                                                                               |
+| **Rules**                | `.agents/rules/<file>.md.rule`                             | One rule per tracked `.md` file: what `appliesTo` (path glob), what `purpose`. Enforced by `bun run check:md`.                                                                                                                                                                 | Reasoning behind the rule (that's in `AGENTS.md` or the relevant skill).                                                                                                                       |
+| **Memory**               | `.agents/memory/{facts,retros,lessons}/*.md` + `index.tsv` | Facts we learned, retros on mistakes, lessons that change behaviour. Frontmatter with `id`, `type`, `tags`, `created`, `summary`.                                                                                                                                              | Decisions about the product (those are ADRs).                                                                                                                                                  |
+| **ADRs**                 | `docs/adr/NNNN-<slug>.md`                                  | **Product / architecture decisions about a component or a feature.** When we add the supervisor, an ADR pins its shape; when we add the wire protocol, an ADR pins its frames; when we add analytics, an ADR pins the adoption-score formula. Each ADR cites its memory facts. | Tooling (bun/tsdown/vitest — in `package.json` + `tsdown.config.ts` + `AGENTS.md`); processes (in skills); invariants (in `AGENTS.md`); code style (in `.oxlintrc.json` + `.prettierrc.json`). |
+| **`SPEC.md`** (PR 2+)    | repo root                                                  | **Component index** — one row per component of Hookorama, pointing at the package, the ADRs that pin its shape, the rules that govern its `.md`, the skills that touch it, and the memory facts it relies on.                                                                  | Detailed component description (that lives in the ADR + the package's `README.md`); FR/NFR inventories (those live in the relevant ADR); build / process docs (in `AGENTS.md` and skills).     |
+| **`ROADMAP.md`** (PR 2+) | repo root                                                  | Ordered list of phases. Each phase row cites the ADRs it ships and the components it activates.                                                                                                                                                                                | A spec for any component (those live in ADRs and `SPEC.md`).                                                                                                                                   |
 
 If you find a `.md` that does not fit one of these rows, the PR is wrong. Either move the file to the right category, or open a new ADR / rule / skill to justify a new category.
 
@@ -91,18 +91,45 @@ If you cannot satisfy steps 11, 12, or 13, the PR is **not ready to merge**. Sto
 
 ## 6. Common traps
 
-| Trap | Fix |
-|---|---|
-| Adding a `vscode` import to `packages/supervisor`, `packages/client`, or `packages/cli`. | Move the logic to `packages/extension`, or use a plain-string equivalent. |
-| Adding code without an ADR to satisfy. | Add an ADR in `docs/adr/` first, or decline the work. |
-| Skipping the PR template. | The "Cites ADR(s)" and "Acceptance criteria" fields are required. Empty PRs are auto-rejected by reviewers. |
-| Marking work as done without running `bun run ci`. | Run it locally before pushing. |
-| Creating a `.md` without first adding a rule. | Add the rule to `.agents/rules/` and the row to `.agents/RULES.md` first. |
-| Re-doing a finished component. | Check `SPEC.md` (when it exists) and `ROADMAP.md` (when it exists) first. Phases are tracked. |
-| Adding `console.log` in production code. | oxlint allows only `console.warn` and `console.error`. Use `console.warn` for diagnostics. |
-| Treating `bun.lock` as something to commit selectively. | Commit the whole lockfile. Drift in lockfiles causes irreproducible CI. |
-| Using `any` to silence a type error. | Fix the type. `unknown` is allowed; `any` is not. |
-| Writing a tooling ADR ("ADR 0001 — use bun"). | Tooling choices go in `AGENTS.md` and config files, not in `docs/adr/`. The ADR index is for product/architecture decisions only. |
+| Trap                                                                                     | Fix                                                                                                                               |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Adding a `vscode` import to `packages/supervisor`, `packages/client`, or `packages/cli`. | Move the logic to `packages/extension`, or use a plain-string equivalent.                                                         |
+| Adding code without an ADR to satisfy.                                                   | Add an ADR in `docs/adr/` first, or decline the work.                                                                             |
+| Skipping the PR template.                                                                | The "Cites ADR(s)" and "Acceptance criteria" fields are required. Empty PRs are auto-rejected by reviewers.                       |
+| Marking work as done without running `bun run ci`.                                       | Run it locally before pushing.                                                                                                    |
+| Creating a `.md` without first adding a rule.                                            | Add the rule to `.agents/rules/` and the row to `.agents/RULES.md` first.                                                         |
+| Re-doing a finished component.                                                           | Check `SPEC.md` (when it exists) and `ROADMAP.md` (when it exists) first. Phases are tracked.                                     |
+| Adding `console.log` in production code.                                                 | oxlint allows only `console.warn` and `console.error`. Use `console.warn` for diagnostics.                                        |
+| Treating `bun.lock` as something to commit selectively.                                  | Commit the whole lockfile. Drift in lockfiles causes irreproducible CI.                                                           |
+| Using `any` to silence a type error.                                                     | Fix the type. `unknown` is allowed; `any` is not.                                                                                 |
+| Writing a tooling ADR ("ADR 0001 — use bun").                                            | Tooling choices go in `AGENTS.md` and config files, not in `docs/adr/`. The ADR index is for product/architecture decisions only. |
+
+## 7. Fork-upstream workflow
+
+The rig operates against `ThePlenkov/hookorama` (fork) with
+reviewers running on `hookorama/hookorama` (upstream). Every
+bead touches both remotes; the checklist below is the
+contract. See `docs/adr/0005-fork-upstream-workflow.md` for
+the rationale and
+`.agents/memory/lessons/fork-upstream-auto-merge-on-sync.md`
+for the auto-merge mechanics.
+
+- [ ] **Fork `main` is read-only.** The only way fork `main`
+      advances is `git merge upstream/main --no-ff` (or fast-forward
+      when clean). Never `git merge feat/*` into fork `main`.
+- [ ] **Feature branches live in the fork first.** Commit, push
+      to `origin` (fork), open the fork PR. CI + review bots run
+      on the fork PR; resolve threads there.
+- [ ] **Promote by pushing the same branch (same SHA) to
+      upstream.** No cherry-pick, no rebase, no squash between the
+      two pushes. Open the upstream PR from that branch.
+- [ ] **Never force-push a public feature branch.** Rewriting
+      SHAs in upstream breaks the auto-merge-on-sync trick; the
+      fork PR will not close when fork `main` syncs.
+- [ ] **Sync closes the fork PR automatically.** When upstream
+      merges the upstream PR and fork `main` syncs from
+      `upstream/main`, GitHub flips the fork PR to `MERGED` on its
+      own. Do **not** run `gh pr close` manually on the fork PR.
 
 ## See also
 
@@ -114,4 +141,4 @@ If you cannot satisfy steps 11, 12, or 13, the PR is **not ready to merge**. Sto
 
 ---
 
-*This file is intentionally short and prescriptive. Detail lives in skills, rules, memory, and ADRs. If you find yourself wanting to write a long answer here, move it into a skill or an ADR instead.*
+_This file is intentionally short and prescriptive. Detail lives in skills, rules, memory, and ADRs. If you find yourself wanting to write a long answer here, move it into a skill or an ADR instead._

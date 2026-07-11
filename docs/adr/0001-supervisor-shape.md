@@ -87,6 +87,31 @@ pid?, pidChain?, parentKey?, terminalName? }`. `parentKey` is
   (when the extension is unavailable) can resolve a pid chain
   to a command name.
 
+  > **Why discovery does not feed the live `ProcessEntry` map.**
+  > The snapshot is rebuilt at startup from `pid → (ppid, command)`
+  > rows only. The live `Map<ProcessKey, ProcessEntry>` is owned
+  > by hook events. The two reasons are:
+  >
+  > 1. **PID recycling.** A `Map<pid, ProcessRow>` captured at
+  >    `t=0` becomes unsound by `t=T`: the OS may reuse a PID for
+  >    an unrelated process. Hook events carry the pidChain of
+  >    the event's own process tree, so they remain correct as
+  >    long as the pid being matched is alive when the event
+  >    arrives. A snapshot from minutes ago is not.
+  > 2. **Status is the agent's, not the process's.** A running
+  >    `claude` binary that hasn't emitted a hook event is, from
+  >    the supervisor's point of view, indistinguishable from
+  >    any other running shell in the same cwd. Faking a
+  >    placeholder row would lie to the UI until the next event
+  >    arrives — worse than showing nothing.
+  >
+  > Practical consequence: after a supervisor restart, agents
+  > that were running but have not emitted a hook event since
+  > the restart are not visible in the live state until they
+  > emit their next event. The history layer (ADR 0003) is the
+  > authoritative record of who was running; the live map is
+  > the present-tense view.
+
 - **History** (SQLite, append‑only) — opened in‑process by the
   supervisor. Schema, retention policy, and migrations land in
   ADR 0003 (Phase 2). PR 2 ships the supervisor shape; PR 3

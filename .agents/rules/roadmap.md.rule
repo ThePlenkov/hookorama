@@ -39,6 +39,6 @@ closes the phase (the PR's last commit).
 | Phase | ADR(s) | Component(s) | Status |
 |-------|--------|--------------|--------|
 | Phase 0 — Bootstrap | (none — tooling) | (none — no components yet) | shipped |
-| Phase 1 — Supervisor | ADR NNNN | Supervisor | in progress / planned |
+| Phase 1 — Supervisor | ADR NNNN | Supervisor | in progress |
 | … | … | … | … |
 ```
