@@ -1,0 +1,69 @@
+---
+appliesTo: PROJECT_STATE.md
+purpose: groundhog-day anchor for Mayor and any agent after context reset
+owner: governance
+created: 2026-07-11
+---
+
+# Rule: PROJECT_STATE.md
+
+`PROJECT_STATE.md` is the **groundhog-day anchor**. It exists so that
+a fresh Mayor session — or any agent arriving after a context reset —
+does not have to re-derive project context from conversation history.
+
+The file is **not** a spec and **not** an ADR. It is a snapshot of
+the project's current intent, topology, and open questions, owned by
+the governance category. It is updated by PRs that change the topology
+or resolve an open question.
+
+Constraints:
+
+- Keep under ~150 lines total. Compression is a feature: if a section
+  is too long, the detail belongs in an ADR, a skill, or `SPEC.md` /
+  `ROADMAP.md`.
+- Sections are mandatory and in this order: **Mission**, **Town
+  topology**, **Operating model**, **Mayor behavior contract**,
+  **Open questions**, **Out-of-scope**. PRs may add new sections but
+  must not delete these.
+- **Open questions** are blockers, not nice-to-have. Each open
+  question is closed by a PR that either resolves it (and edits the
+  file) or escalates it (and adds a `gt:escalation` bead).
+- **Out-of-scope** lists work that looks tempting but is explicitly
+  forbidden; touching it requires a new ADR that supersedes this one.
+
+`bun run check:md` enforces the rule existence (this file's
+`appliesTo` glob). The contents are reviewed by humans.
+
+## Template
+
+```markdown
+# Project state — Hookorama
+
+## Mission
+
+- Hookorama is a local supervisor for LLM/CLI agents (Claude Code,
+  Devin, Codex, …).
+- …
+
+## Town topology (N rigs)
+
+| rig id | name | role | touched? |
+| ------ | ---- | ---- | -------- |
+| …      | …    | …    | …        |
+
+## Operating model
+
+- …
+
+## Mayor behavior contract
+
+- …
+
+## Open questions (blockers, not nice-to-have)
+
+- Q1: …
+
+## Out-of-scope
+
+- …
+```
