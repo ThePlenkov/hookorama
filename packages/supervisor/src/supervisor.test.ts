@@ -69,14 +69,16 @@ describe('Supervisor', () => {
     await sup.start();
     await sup.stop();
     await sup.stop();
-    expect(sup.isStopping()).toBe(true);
+    // Once stop() has fully completed, the supervisor is no longer stopping;
+    // a second stop() is a no-op that leaves the lifecycle in the same state.
+    expect(sup.isStopping()).toBe(false);
   });
 
   test('start after stop clears the stopping flag and re-acquires the slot', async () => {
     const sup = new Supervisor({ lifecycle: { customPidPath: pidPath }, discovery: null });
     expect(await sup.start()).toBe(true);
     await sup.stop();
-    expect(sup.isStopping()).toBe(true);
+    expect(sup.isStopping()).toBe(false);
     expect(await sup.start()).toBe(true);
     expect(sup.isStopping()).toBe(false);
     await sup.stop();

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -199,6 +199,59 @@ describe('closeSubagentByKey idempotency', () => {
       const second = sup.endSubagent(identity.key, '2026-07-10T00:00:03.000Z', 'tool-1');
       expect(second.closedByKey).toBe(false);
       expect(childKey).toBeTruthy();
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('start/stop lifecycle race', () => {
+  // oxlint-disable-next-line consistent-function-scoping
+  const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+    // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping
+    let resolveGate: () => void = () => {
+      /* populated synchronously by the Promise executor below */
+    };
+    const promise = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    return { promise, resolve: resolveGate };
+  };
+
+  test('a start issued while a stop is in flight acquires the slot after stop completes', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-lifecycle-race-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const rowsGate = deferred();
+      const slow: ProcessDiscovery = {
+        list: () => rowsGate.promise.then(() => []),
+      };
+      const sup = new Supervisor({ lifecycle: { customPidPath: pidPath }, discovery: slow });
+
+      const first = sup.start();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const stopP = sup.stop();
+      const restart = sup.start();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      rowsGate.resolve();
+
+      // First start acquired the slot, then stop() released it. Without the
+      // lifecycle-tail serialization, restart would short-circuit on the
+      // still-held slot AND `stop()` would have released the slot out from
+      // under it (the "phantom slot" cubic flagged).
+      expect(await first).toBe(true);
+      await stopP;
+      // With the fix, restart is queued after stop completes, so it observes
+      // a clean slot and legitimately acquires it.
+      expect(await restart).toBe(true);
+      expect(sup.isStopping()).toBe(false);
+
+      await sup.stop();
+      // After explicit stop(), the slot is fully released.
+      expect(sup.isStopping()).toBe(false);
+      expect(existsSync(pidPath)).toBe(false);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

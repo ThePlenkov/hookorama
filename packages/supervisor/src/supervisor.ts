@@ -58,12 +58,30 @@ export class Supervisor {
   }
 
   private inflightStart: Promise<boolean> | null = null;
+  /**
+   * Serial tail of every start/stop transition. Both `start()` and
+   * `stop()` chain onto this so a stop completes (release + reset
+   * of `stopping`) before the next start acquires the PID slot.
+   * Without this, a `start()` issued while `stop()` is awaiting the
+   * prior `inflightStart` could clear `stopping`, short‑circuit on
+   * the still‑held slot, and then have `stop()` release the slot
+   * out from under the new caller.
+   */
+  private lifecycleTail: Promise<void> = Promise.resolve();
 
   /** Acquire the PID slot. Returns false if another supervisor is alive. */
   async start(): Promise<boolean> {
-    if (this.stopping) {
-      this.stopping = false;
-    }
+    const prior = this.lifecycleTail;
+    const next = prior.then(() => this.runStart());
+    this.lifecycleTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    await prior;
+    return next;
+  }
+
+  private async runStart(): Promise<boolean> {
     if (this.pidSlot?.acquired) return true;
     if (this.inflightStart !== null) return this.inflightStart;
     this.inflightStart = (async () => {
@@ -92,6 +110,17 @@ export class Supervisor {
 
   /** Release the PID slot and mark the supervisor as stopping. */
   async stop(): Promise<void> {
+    const prior = this.lifecycleTail;
+    const next = prior.then(() => this.runStop());
+    this.lifecycleTail = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    await prior;
+    return next;
+  }
+
+  private async runStop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
     if (this.inflightStart !== null) {
@@ -103,11 +132,13 @@ export class Supervisor {
     }
     if (!this.pidSlot?.acquired) {
       this.pidSlot = null;
+      this.stopping = false;
       return;
     }
     try {
       await releasePidSlot(this.pidFile);
       this.pidSlot = null;
+      this.stopping = false;
     } catch (err) {
       this.stopping = false;
       throw err;
