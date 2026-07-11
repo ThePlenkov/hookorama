@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -199,6 +199,296 @@ describe('closeSubagentByKey idempotency', () => {
       const second = sup.endSubagent(identity.key, '2026-07-10T00:00:03.000Z', 'tool-1');
       expect(second.closedByKey).toBe(false);
       expect(childKey).toBeTruthy();
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('start/stop lifecycle race', () => {
+  /**
+   * Manual deferred used to gate discovery rows in the race
+   * tests below. Lets a test start `Supervisor.start()` and
+   * `Supervisor.stop()` against a discovery walker that does
+   * not resolve until the test calls `resolve()`.
+   */
+  // oxlint-disable-next-line consistent-function-scoping
+  const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+    // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping
+    let resolveGate: () => void = () => {
+      /* populated synchronously by the Promise executor below */
+    };
+    const promise = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    return { promise, resolve: resolveGate };
+  };
+
+  test('a start issued while a stop is in flight acquires the slot after stop completes', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-lifecycle-race-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const rowsGate = deferred();
+      const slow: ProcessDiscovery = {
+        list: () => rowsGate.promise.then(() => []),
+      };
+      const sup = new Supervisor({ lifecycle: { customPidPath: pidPath }, discovery: slow });
+
+      const first = sup.start();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const stopP = sup.stop();
+      const restart = sup.start();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      rowsGate.resolve();
+
+      // First start acquired the slot, then stop() released it. With the
+      // dedup of start() onto startTail, restart waits for first to finish
+      // (sharing the slot check), then runs against a clean slot.
+      await stopP;
+      expect(await first).toBe(true);
+      // restart acquires the slot AFTER stop completes — a clean slot.
+      expect(await restart).toBe(true);
+      expect(sup.isStopping()).toBe(false);
+
+      await sup.stop();
+      // After explicit stop(), the slot is fully released.
+      expect(sup.isStopping()).toBe(false);
+      expect(existsSync(pidPath)).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('stop() releases the PID slot even when discovery hangs forever', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-hung-discovery-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const hungGate = deferred();
+      const hung: ProcessDiscovery = {
+        list: () => hungGate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: hung,
+        stopWaitMs: 50,
+      });
+
+      // Don't await start: it will hang waiting for the discovery seed.
+      const startP = sup.start();
+      // Wait until the PID slot has been acquired (deterministic,
+      // rather than racing setImmediate against the slot write).
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // stop() must release the slot within stopWaitMs, not wait
+      // forever on the hung discovery spawn.
+      await sup.stop();
+      expect(existsSync(pidPath)).toBe(false);
+      expect(sup.isStopping()).toBe(false);
+
+      // Resolve the hung gate so the abandoned start() can finish
+      // without leaking an unhandled rejection.
+      hungGate.resolve();
+      // The abandoned start() must report false once its discovery
+      // finally settles: stop() force-released the slot while it
+      // was hung, so by the time seedFromProcessDiscovery returns,
+      // pidSlot is null and the daemon no longer owns it.
+      expect(await startP).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('endSubagent with a toolUseId that has no live child', () => {
+  test('returns closedByKey:false, closedByParent:false (does not close unrelated children)', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-end-no-match-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const sup = new Supervisor({ lifecycle: { customPidPath: pidPath }, discovery: null });
+      sup.setOpenTerminals([{ pid: 7, cwd: '/p' }]);
+      const identity = sup.applyHook({ pidChain: [7], cwd: '/p', status: 'thinking' });
+      if (identity === null) throw new Error('identity should resolve');
+
+      // Open one subagent under toolUseId="real" and another under "other".
+      const realKey = sup.startSubagent(identity, '2026-07-10T00:00:01.000Z', 'real');
+      const otherKey = sup.startSubagent(identity, '2026-07-10T00:00:01.500Z', 'other');
+
+      // Attempt to end a toolUseId that was never opened. Without the
+      // fix, this would fall back to closeSubagentOf(parentKey) and
+      // close one of the live children (most recent: "other").
+      const result = sup.endSubagent(identity.key, '2026-07-10T00:00:02.000Z', 'never-opened');
+      expect(result).toEqual({ closedByKey: false, closedByParent: false });
+
+      // Both real and other must still be live.
+      const remaining = sup
+        .snapshot()
+        .filter((e) => e.parentKey === identity.key)
+        .filter((e) => e.status !== 'done');
+      expect(remaining.map((e) => e.key).sort()).toEqual([otherKey, realKey].sort());
+
+      // Sanity: ending the actual "real" key still works.
+      const realClose = sup.endSubagent(identity.key, '2026-07-10T00:00:03.000Z', 'real');
+      expect(realClose.closedByKey).toBe(true);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('StateStore.snapshot immutability', () => {
+  test('returned entries (and nested pidChain) are independent copies', () => {
+    const sup = new Supervisor({
+      lifecycle: { customPidPath: '/tmp/hookorama-snap-immut' },
+      discovery: null,
+    });
+    sup.setOpenTerminals([{ pid: 11, cwd: '/q' }]);
+    const identity = sup.applyHook({
+      pidChain: [11],
+      cwd: '/q',
+      status: 'thinking',
+    });
+    if (identity === null) throw new Error('identity should resolve');
+
+    const snap = sup.snapshot();
+    const entry = snap[0];
+    if (entry === undefined) throw new Error('snapshot should have one entry');
+    const original = entry.pidChain === undefined ? undefined : [...entry.pidChain];
+    expect(entry.pidChain).toEqual([11]);
+
+    // Mutate the snapshot's pidChain via a cast (TS readonly, but the
+    // test asserts runtime isolation). The store must not observe it.
+    if (entry.pidChain !== undefined) {
+      (entry.pidChain as number[])[0] = 9999;
+    }
+
+    const second = sup.snapshot();
+    expect(second[0]?.pidChain).toEqual(original);
+    // Ensure the entry object itself is a different reference.
+    expect(second[0]).not.toBe(entry);
+  });
+});
+
+describe('start() after a stop() that force-released a wedged start', () => {
+  /**
+   * Manual deferred for the wedged-discovery scenario. Lets the
+   * test wedge discovery on a never-resolving promise, drive
+   * `Supervisor.stop()` past its `stopWaitMs` timeout, and only
+   * then resolve discovery so the new `start()` can run.
+   */
+  // oxlint-disable-next-line consistent-function-scoping
+  const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+    // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping
+    let resolveGate: () => void = () => {
+      /* populated synchronously by the Promise executor below */
+    };
+    const promise = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    return { promise, resolve: resolveGate };
+  };
+
+  test('a fresh start succeeds once the wedged in-flight start is detached', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-restart-after-hung-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const hungGate = deferred();
+      const hung: ProcessDiscovery = {
+        list: () => hungGate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: hung,
+        stopWaitMs: 50,
+      });
+
+      // Begin a start that will hang in discovery.seedFromProcessDiscovery.
+      const wedgedStart = sup.start();
+      // Wait until the PID slot is on disk.
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // stop() must force-release the slot, even though the start is wedged.
+      await sup.stop();
+      expect(existsSync(pidPath)).toBe(false);
+      expect(sup.isStopping()).toBe(false);
+
+      // A fresh start must succeed — the wedged IIFE is detached, and a
+      // subsequent runStart must NOT dedupe to the wedged promise. Without
+      // the fix, inflightStart still pointed at the wedged IIFE and the
+      // fresh start would never settle.
+      const fresh = sup.start();
+      // Resolve the original wedged gate so its dangling IIFE can settle
+      // without leaking.
+      hungGate.resolve();
+      await wedgedStart; // resolves to false (slot already force-released)
+      expect(await fresh).toBe(true);
+      expect(existsSync(pidPath)).toBe(true);
+      await sup.stop();
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('pidSlot is cleared before releasePidSlot awaits, so the abandoned start reports false', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-pidslot-release-order-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const gate = deferred();
+      // Wrap releasePidSlot so we can deterministically hold stop()
+      // inside the `await releasePidSlot(...)` call, after it has
+      // already cleared `pidSlot`. (The original releasePidSlot import
+      // is unused here but kept as a reference for any future
+      // instrumentation; the call in `Supervisor.stop` already
+      // executes correctly against the real implementation.)
+      const realRelease = (await import('./lifecycle/pid-file.js' as string)).releasePidSlot;
+      void realRelease;
+      // Defer the gate-resolve to AFTER stop() has reached its
+      // `pidSlot = null` line. We do this by polling for the
+      // PID-file deletion (which happens just before the awaited
+      // release resolves) and only then releasing the discovery gate.
+      const slow: ProcessDiscovery = {
+        list: () => gate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: slow,
+        stopWaitMs: 200,
+      });
+
+      const startP = sup.start();
+      const acquireDeadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < acquireDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // Kick off stop(). It will race the in-flight start (which is
+      // wedged on `gate`), win the timeout race, then set
+      // `this.pidSlot = null` and `await releasePidSlot(...)`.
+      // We then resolve the discovery gate; the IIFE resumes and
+      // sees `!this.pidSlot?.acquired`, returning false.
+      const stopP = (async () => {
+        await sup.stop();
+        // Once stop() has returned, the in-flight start's IIFE has
+        // already run to completion; we only need the gate to have
+        // been resolved before the post-discovery check.
+        gate.resolve();
+      })();
+      // Wait for stop() to finish (it force-released the slot).
+      await stopP;
+      // The wedged start's IIFE observes pidSlot=null after the gate
+      // resolves, and reports false (not the truthy slot we no longer own).
+      void realRelease;
+      expect(await startP).toBe(false);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

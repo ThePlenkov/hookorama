@@ -53,7 +53,7 @@ export function resolveIdentity(
   cwd: string | undefined,
   openTerminals: readonly OpenTerminal[],
 ): ResolvedIdentity | null {
-  const safeCwd = (cwd ?? '').trim();
+  const safeCwd = cwd ?? '';
   const safeChain = pidChain ?? [];
 
   for (const pid of safeChain) {
@@ -84,9 +84,15 @@ export function resolveIdentity(
  * paths, and lowercases the Windows drive letter. The supervisor
  * stores the original `cwd` on the entry but uses the normalised
  * form for the key.
+ *
+ * The normalisation deliberately does NOT strip leading/trailing
+ * whitespace — paths with surrounding spaces are valid filesystem
+ * names on POSIX ("/foo " and "/foo" are distinct directories).
+ * Callers must pass the cwd verbatim; the resolver only collapses
+ * separator and casing differences.
  */
 export function normaliseCwd(cwd: string): string {
-  let input = cwd.trim();
+  let input = cwd;
   if (input.length === 0) return input;
   // Detect Windows-style paths by a drive-letter prefix (e.g. "C:").
   // On those paths, collapse all separators to forward slash and

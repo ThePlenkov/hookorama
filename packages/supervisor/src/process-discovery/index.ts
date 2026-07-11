@@ -13,16 +13,41 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 
+/**
+ * One row of platform-discovered process table. Cross-platform
+ * shape so the supervisor and its persistence can treat rows
+ * uniformly. `command` is the truncated process name (`/proc/<pid>/comm`
+ * on Linux, `comm` column on macOS, `Name` on `wmic` on Windows) —
+ * not the full argv. Use `command` for display only; identity
+ * resolution keys off `pid` and the parent chain.
+ */
 export interface ProcessRow {
   readonly pid: number;
   readonly ppid: number;
   readonly command: string;
 }
 
+/**
+ * Contract every platform-specific walker implements. The
+ * supervisor only reads; it never writes or signals processes
+ * here. Implementations must resolve their promise promptly (the
+ * lifecycle layer bounds the wait in `Supervisor.stop`) and
+ * return an empty list when their underlying OS facility is
+ * unavailable rather than rejecting.
+ */
 export interface ProcessDiscovery {
   list(): Promise<readonly ProcessRow[]>;
 }
 
+/**
+ * Run `cmd` and return its stdout as trimmed non-empty lines.
+ *
+ * Cross‑platform shell wrapper used by the macOS and Windows
+ * walkers. On non‑zero exit the concatenated stderr is surfaced
+ * in the rejection message so a missing `ps` or `wmic` is
+ * diagnosable from logs alone. Stdin is closed; stdin/stdout are
+ * pipes; stderr is captured but not forwarded.
+ */
 function spawnLines(cmd: readonly string[]): Promise<readonly string[]> {
   const head = cmd[0];
   if (head === undefined) {
@@ -102,11 +127,34 @@ export class LinuxProcDiscovery implements ProcessDiscovery {
   }
 }
 
+/**
+ * Read the entries of a directory as their raw names. Lazily
+ * imports `node:fs/promises` so test code that mocks the fs
+ * module only has to stub a single import site. Returns whatever
+ * `readdir` returns in declaration order (no sort).
+ */
 async function readDirNames(dir: string): Promise<readonly string[]> {
   const { readdir } = await import('node:fs/promises');
   return readdir(dir);
 }
 
+/**
+ * Parse a single `/proc/<pid>/stat` blob to its parent PID.
+ *
+ * The `comm` field is wrapped in parentheses and may itself
+ * contain spaces and parens, so this splits from the last `)` to
+ * avoid being fooled by names like `cat (something)`. Only the
+ * PPID is returned; the rest of the fields are irrelevant to the
+ * supervisor and would be a costly target for changes when
+ * `/proc` layouts shift between kernel versions.
+ *
+ * Returns `null` when the blob is malformed (no closing paren,
+ * no numeric PPID). PPID `0` is a valid Linux value (kernel
+ * threads and swapper/init on some distros report it); only
+ * `NaN` is rejected.
+ *
+ * Exported for unit testing.
+ */
 export function parseStat(stat: string): { ppid: number } | null {
   // `/proc/<pid>/stat` layout: pid (comm) state ppid ...
   // The comm field is wrapped in parens and may contain spaces
@@ -201,13 +249,23 @@ export function parseWmicCsv(lines: readonly string[]): readonly ProcessRow[] {
   return rows;
 }
 
+/**
+ * Platform identifiers supported by `pickDiscovery`. Anything
+ * else (`freebsd`, `openbsd`, `sunos`, …) is explicitly not
+ * supported and returns `null` from the factory.
+ */
 export type SupportedPlatform = 'linux' | 'darwin' | 'win32';
 
 /**
- * Pick the discovery walker for the current platform. Linux,
- * macOS, and Windows are supported. Anything else (BSD, others)
- * returns `null` and the supervisor logs that process discovery is
- * not available for this platform.
+ * Pick the discovery walker for the given platform string.
+ *
+ * Accepts `process.platform` directly (`'linux' | 'darwin' | 'win32'`)
+ * but the parameter is typed `string` so tests can pass exotic
+ * values and assert the `null` fallback. Anything outside the
+ * supported triple returns `null`; the supervisor then logs that
+ * process discovery is unavailable for this platform and proceeds
+ * without the `pidChain` fallback, relying entirely on extension
+ * identity.
  */
 export function pickDiscovery(platform: string): ProcessDiscovery | null {
   switch (platform) {

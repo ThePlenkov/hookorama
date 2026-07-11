@@ -71,4 +71,14 @@ describe('normaliseCwd', () => {
   test('returns the empty string unchanged', () => {
     expect(normaliseCwd('')).toBe('');
   });
+
+  test('does NOT strip leading or trailing whitespace — distinct paths stay distinct', () => {
+    expect(normaliseCwd('/foo')).toBe('/foo');
+    expect(normaliseCwd('/foo ')).toBe('/foo ');
+    expect(normaliseCwd(' /foo')).toBe(' /foo');
+    // Distinct cwds must produce distinct keys via resolveIdentity.
+    const a = resolveIdentity(undefined, '/foo', []);
+    const b = resolveIdentity(undefined, '/foo ', []);
+    expect(a?.key).not.toBe(b?.key);
+  });
 });
