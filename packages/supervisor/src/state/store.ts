@@ -42,9 +42,12 @@ export class StateStore {
     return this.entries.size;
   }
 
-  /** All entries, including subagents. */
+  /** All entries, including subagents. Returned objects and their
+   *  nested `pidChain` arrays are deep-cloned so callers cannot
+   *  mutate the store's single-writer invariant by writing through
+   *  the snapshot. */
   snapshot(): ProcessEntry[] {
-    return Array.from(this.entries.values());
+    return Array.from(this.entries.values(), cloneEntry);
   }
 
   /** Top‑level entries only (entries without a `parentKey`). */
@@ -209,4 +212,14 @@ export class StateStore {
     this.entries.set(identity.key, next);
     return prev;
   }
+}
+
+/** Deep-clone an entry, including its nested `pidChain` array,
+ *  so callers that mutate the returned object cannot corrupt the
+ *  store's single-writer invariant. */
+function cloneEntry(entry: ProcessEntry): ProcessEntry {
+  return {
+    ...entry,
+    ...(entry.pidChain !== undefined ? { pidChain: [...entry.pidChain] } : {}),
+  };
 }
