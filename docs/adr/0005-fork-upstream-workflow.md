@@ -82,12 +82,15 @@ scratch; never rewrite a published SHA.
 
 Because the fork feature branch and the upstream feature
 branch are the same bytes (same SHAs), a routine
-`git merge upstream/main` into fork `main` causes GitHub to
-auto-mark the fork PR as merged. The polecat does **not** run
-`gh pr close` on the fork PR manually — it will flip to
-MERGED on its own once fork `main` advances. If the fork PR
-does not auto-close, the SHAs diverged and the lesson's
-"Applies when" checklist applies.
+`git merge upstream/main` (followed by `git push origin main`)
+into fork `main` causes GitHub to auto-mark the fork PR as
+merged. The polecat does **not** run `gh pr close` on the
+fork PR manually — it will flip to MERGED on its own once
+fork `main` advances (the `push origin main` step is what
+makes the new fork `main` SHA visible to GitHub's PR-status
+graph; without it the PR will not flip). If the fork PR does
+not auto-close, the SHAs diverged and the lesson's "Applies
+when" checklist applies.
 
 ## Consequences
 

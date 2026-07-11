@@ -450,7 +450,7 @@ export class Supervisor {
    * identity module directly. Identical signature and behaviour
    * to `normaliseCwd` in `identity/resolve`.
    */
-  static normaliseCwd = normaliseCwd;
+  static readonly normaliseCwd = normaliseCwd;
 }
 
 /**
