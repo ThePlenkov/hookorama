@@ -206,6 +206,12 @@ describe('closeSubagentByKey idempotency', () => {
 });
 
 describe('start/stop lifecycle race', () => {
+  /**
+   * Manual deferred used to gate discovery rows in the race
+   * tests below. Lets a test start `Supervisor.start()` and
+   * `Supervisor.stop()` against a discovery walker that does
+   * not resolve until the test calls `resolve()`.
+   */
   // oxlint-disable-next-line consistent-function-scoping
   const deferred = (): { promise: Promise<void>; resolve: () => void } => {
     // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping
@@ -369,6 +375,12 @@ describe('StateStore.snapshot immutability', () => {
 });
 
 describe('start() after a stop() that force-released a wedged start', () => {
+  /**
+   * Manual deferred for the wedged-discovery scenario. Lets the
+   * test wedge discovery on a never-resolving promise, drive
+   * `Supervisor.stop()` past its `stopWaitMs` timeout, and only
+   * then resolve discovery so the new `start()` can run.
+   */
   // oxlint-disable-next-line consistent-function-scoping
   const deferred = (): { promise: Promise<void>; resolve: () => void } => {
     // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping

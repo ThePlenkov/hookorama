@@ -10,7 +10,13 @@
 
 import type { ResolvedIdentity } from '../identity/resolve.js';
 
-/** Six discrete states, lifted from the v1 predecessor. */
+/**
+ * Discrete states a `ProcessEntry` can be in. Six values, lifted
+ * from the v1 predecessor with no renaming because surfaces and
+ * v1 consumers rely on the exact strings. `done` and `error` are
+ * terminal — once an entry is in either, `closeSubagentByKey` /
+ * `closeSubagentOf` will not return `true` for it again.
+ */
 export type Status = 'idle' | 'thinking' | 'running-tool' | 'waiting-input' | 'done' | 'error';
 
 /**
@@ -37,24 +43,44 @@ export class StateStore {
   private readonly subagentCounters = new Map<string, number>();
   private readonly discovered = new Map<number, { pid: number; ppid: number; command: string }>();
 
-  /** Total entry count, including virtual subagent nodes. */
+  /**
+   * Total entry count, including virtual subagent nodes.
+   *
+   * Intended for diagnostics and tests; surfaces should prefer
+   * `snapshot()` so they observe a stable point‑in‑time view.
+   */
   size(): number {
     return this.entries.size;
   }
 
-  /** All entries, including subagents. Returned objects and their
-   *  nested `pidChain` arrays are deep-cloned so callers cannot
-   *  mutate the store's single-writer invariant by writing through
-   *  the snapshot. */
+  /**
+   * All entries, including subagents. Returned objects and their
+   * nested `pidChain` arrays are deep-cloned so callers cannot
+   * mutate the store's single-writer invariant by writing through
+   * the snapshot.
+   *
+   * The array is ordered by map insertion (the iteration order
+   * of the underlying `Map`), which is stable across calls only
+   * as long as no concurrent mutation has occurred.
+   */
   snapshot(): ProcessEntry[] {
     return Array.from(this.entries.values(), cloneEntry);
   }
 
-  /** Top‑level entries only (entries without a `parentKey`). */
+  /**
+   * Top-level entries only — entries without a `parentKey`.
+   * Virtual subagent children are excluded. Same defensive‑copy
+   * guarantees as `snapshot`.
+   */
   liveEntries(): ProcessEntry[] {
     return this.snapshot().filter((e) => e.parentKey === undefined);
   }
 
+  /**
+   * Look up a single entry by key without cloning. The returned
+   * reference is the store's live record; callers MUST NOT
+   * mutate it. Use `snapshot()` when you need a defensive copy.
+   */
   get(key: string): ProcessEntry | undefined {
     return this.entries.get(key);
   }
@@ -74,7 +100,13 @@ export class StateStore {
     }
   }
 
-  /** Read-only view of the discovered-process snapshot. */
+  /**
+   * Read-only view of the discovered-process snapshot. The
+   * returned array is a fresh array but the row objects are the
+   * store's internal records (no defensive clone); callers MUST
+   * NOT mutate them. Replaced wholesale on every
+   * `seedFromDiscovery` call.
+   */
   discoveredSnapshot(): readonly { pid: number; ppid: number; command: string }[] {
     return Array.from(this.discovered.values());
   }
@@ -156,7 +188,12 @@ export class StateStore {
     return true;
   }
 
-  /** Drop every subagent of a parent. Used on `session_start`. */
+  /**
+   * Drop every subagent of a parent. Used on `session_start` so
+   * a fresh agent session does not inherit stale virtual nodes
+   * from the previous session. Returns the number of children
+   * removed (zero when the parent has no children).
+   */
   clearSubagentChildren(parentKey: string): number {
     let dropped = 0;
     for (const [key, entry] of Array.from(this.entries.entries())) {
