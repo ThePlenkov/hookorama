@@ -237,14 +237,12 @@ describe('start/stop lifecycle race', () => {
       await new Promise((resolve) => setImmediate(resolve));
       rowsGate.resolve();
 
-      // First start acquired the slot, then stop() released it. Without the
-      // lifecycle-tail serialization, restart would short-circuit on the
-      // still-held slot AND `stop()` would have released the slot out from
-      // under it (the "phantom slot" cubic flagged).
-      expect(await first).toBe(true);
+      // First start acquired the slot, then stop() released it. With the
+      // dedup of start() onto startTail, restart waits for first to finish
+      // (sharing the slot check), then runs against a clean slot.
       await stopP;
-      // With the fix, restart is queued after stop completes, so it observes
-      // a clean slot and legitimately acquires it.
+      expect(await first).toBe(true);
+      // restart acquires the slot AFTER stop completes — a clean slot.
       expect(await restart).toBe(true);
       expect(sup.isStopping()).toBe(false);
 
@@ -255,5 +253,113 @@ describe('start/stop lifecycle race', () => {
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  test('stop() releases the PID slot even when discovery hangs forever', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-hung-discovery-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const hungGate = deferred();
+      const hung: ProcessDiscovery = {
+        list: () => hungGate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: hung,
+        stopWaitMs: 50,
+      });
+
+      // Don't await start: it will hang waiting for the discovery seed.
+      const startP = sup.start();
+      // Wait until the PID slot has been acquired (deterministic,
+      // rather than racing setImmediate against the slot write).
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // stop() must release the slot within stopWaitMs, not wait
+      // forever on the hung discovery spawn.
+      await sup.stop();
+      expect(existsSync(pidPath)).toBe(false);
+      expect(sup.isStopping()).toBe(false);
+
+      // Resolve the hung gate so the abandoned start() can finish
+      // without leaking an unhandled rejection.
+      hungGate.resolve();
+      await startP;
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('endSubagent with a toolUseId that has no live child', () => {
+  test('returns closedByKey:false, closedByParent:false (does not close unrelated children)', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-end-no-match-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const sup = new Supervisor({ lifecycle: { customPidPath: pidPath }, discovery: null });
+      sup.setOpenTerminals([{ pid: 7, cwd: '/p' }]);
+      const identity = sup.applyHook({ pidChain: [7], cwd: '/p', status: 'thinking' });
+      if (identity === null) throw new Error('identity should resolve');
+
+      // Open one subagent under toolUseId="real" and another under "other".
+      const realKey = sup.startSubagent(identity, '2026-07-10T00:00:01.000Z', 'real');
+      const otherKey = sup.startSubagent(identity, '2026-07-10T00:00:01.500Z', 'other');
+
+      // Attempt to end a toolUseId that was never opened. Without the
+      // fix, this would fall back to closeSubagentOf(parentKey) and
+      // close one of the live children (most recent: "other").
+      const result = sup.endSubagent(identity.key, '2026-07-10T00:00:02.000Z', 'never-opened');
+      expect(result).toEqual({ closedByKey: false, closedByParent: false });
+
+      // Both real and other must still be live.
+      const remaining = sup
+        .snapshot()
+        .filter((e) => e.parentKey === identity.key)
+        .filter((e) => e.status !== 'done');
+      expect(remaining.map((e) => e.key).sort()).toEqual([otherKey, realKey].sort());
+
+      // Sanity: ending the actual "real" key still works.
+      const realClose = sup.endSubagent(identity.key, '2026-07-10T00:00:03.000Z', 'real');
+      expect(realClose.closedByKey).toBe(true);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('StateStore.snapshot immutability', () => {
+  test('returned entries (and nested pidChain) are independent copies', () => {
+    const sup = new Supervisor({
+      lifecycle: { customPidPath: '/tmp/hookorama-snap-immut' },
+      discovery: null,
+    });
+    sup.setOpenTerminals([{ pid: 11, cwd: '/q' }]);
+    const identity = sup.applyHook({
+      pidChain: [11],
+      cwd: '/q',
+      status: 'thinking',
+    });
+    if (identity === null) throw new Error('identity should resolve');
+
+    const snap = sup.snapshot();
+    const entry = snap[0];
+    if (entry === undefined) throw new Error('snapshot should have one entry');
+    const original = entry.pidChain === undefined ? undefined : [...entry.pidChain];
+    expect(entry.pidChain).toEqual([11]);
+
+    // Mutate the snapshot's pidChain via a cast (TS readonly, but the
+    // test asserts runtime isolation). The store must not observe it.
+    if (entry.pidChain !== undefined) {
+      (entry.pidChain as number[])[0] = 9999;
+    }
+
+    const second = sup.snapshot();
+    expect(second[0]?.pidChain).toEqual(original);
+    // Ensure the entry object itself is a different reference.
+    expect(second[0]).not.toBe(entry);
   });
 });

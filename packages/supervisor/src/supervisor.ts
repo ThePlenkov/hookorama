@@ -24,13 +24,22 @@ export interface SupervisorOptions {
   readonly lifecycle?: { readonly customPidPath?: string };
   readonly discovery?: ProcessDiscovery | null;
   readonly now?: () => Date;
+  /**
+   * Override the maximum time `stop()` will wait for an in-flight
+   * `start()` before releasing the PID slot anyway. Used by tests
+   * to assert the "stop beats hung discovery" contract without
+   * waiting the production 5-second default.
+   */
+  readonly stopWaitMs?: number;
 }
 
 export class Supervisor {
+  private static readonly DEFAULT_STOP_WAIT_MS = 5_000;
   private readonly store = new StateStore();
   private readonly discovery: ProcessDiscovery | null;
   private readonly now: () => Date;
   private readonly pidFile: { path: string };
+  private readonly stopWaitMs: number;
   private pidSlot: { acquired: true } | { acquired: false; existingPid: number } | null = null;
   private stopping = false;
 
@@ -38,6 +47,7 @@ export class Supervisor {
     this.discovery =
       opts.discovery !== undefined ? opts.discovery : pickDiscovery(process.platform);
     this.now = opts.now ?? (() => new Date());
+    this.stopWaitMs = opts.stopWaitMs ?? Supervisor.DEFAULT_STOP_WAIT_MS;
     this.pidFile = pidFilePath({
       product: 'hookorama-supervisor',
       ...(opts.lifecycle?.customPidPath !== undefined
@@ -57,28 +67,33 @@ export class Supervisor {
     for (const t of terminals) this.openTerminalsByPid.set(t.pid, t);
   }
 
+  /** Per-call state for the most recent in-flight `start()`. */
   private inflightStart: Promise<boolean> | null = null;
   /**
-   * Serial tail of every start/stop transition. Both `start()` and
-   * `stop()` chain onto this so a stop completes (release + reset
-   * of `stopping`) before the next start acquires the PID slot.
-   * Without this, a `start()` issued while `stop()` is awaiting the
-   * prior `inflightStart` could clear `stopping`, short‑circuit on
-   * the still‑held slot, and then have `stop()` release the slot
-   * out from under the new caller.
+   * Serial tail of start transitions. Two concurrent `start()`
+   * calls share the same underlying work, so the second sees
+   * the already-acquired slot and returns true. Stop does NOT
+   * chain onto this; it runs concurrently and only awaits
+   * `inflightStart` (bounded by `stopWaitMs`) so a hung
+   * discovery spawn cannot pin the PID slot forever.
    */
-  private lifecycleTail: Promise<void> = Promise.resolve();
+  private startTail: Promise<boolean> = Promise.resolve(false);
+
+  /**
+   * Run a start transition on the serial tail. Repeated calls
+   * observe the previous one's settlement; rejected transitions
+   * never poison the tail.
+   */
+  private enqueueStart(): Promise<boolean> {
+    const prior = this.startTail;
+    const next = prior.then(() => this.runStart());
+    this.startTail = next.catch(() => false);
+    return next;
+  }
 
   /** Acquire the PID slot. Returns false if another supervisor is alive. */
-  async start(): Promise<boolean> {
-    const prior = this.lifecycleTail;
-    const next = prior.then(() => this.runStart());
-    this.lifecycleTail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    await prior;
-    return next;
+  start(): Promise<boolean> {
+    return this.enqueueStart();
   }
 
   private async runStart(): Promise<boolean> {
@@ -95,11 +110,6 @@ export class Supervisor {
           await releasePidSlot(this.pidFile);
           throw err;
         }
-        if (this.stopping) {
-          await releasePidSlot(this.pidFile);
-          this.pidSlot = null;
-          return false;
-        }
         return true;
       } finally {
         this.inflightStart = null;
@@ -109,40 +119,51 @@ export class Supervisor {
   }
 
   /** Release the PID slot and mark the supervisor as stopping. */
-  async stop(): Promise<void> {
-    const prior = this.lifecycleTail;
-    const next = prior.then(() => this.runStop());
-    this.lifecycleTail = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    await prior;
-    return next;
+  stop(): Promise<void> {
+    return this.runStop();
   }
 
   private async runStop(): Promise<void> {
-    if (this.stopping) return;
-    this.stopping = true;
-    if (this.inflightStart !== null) {
-      try {
-        await this.inflightStart;
-      } catch {
-        // start() will have cleaned up; continue to release if needed
-      }
-    }
-    if (!this.pidSlot?.acquired) {
-      this.pidSlot = null;
-      this.stopping = false;
+    if (this.stopping) {
+      // A previous `stop()` is in-flight. Await the start tail
+      // so callers observe the slot actually released, and so
+      // a subsequent `start()` does not acquire a still-held slot.
+      await this.startTail;
       return;
     }
-    try {
-      await releasePidSlot(this.pidFile);
-      this.pidSlot = null;
-      this.stopping = false;
-    } catch (err) {
-      this.stopping = false;
-      throw err;
+    this.stopping = true;
+    if (this.inflightStart !== null) {
+      // Wait for the in-flight `start()` to finalise. A hung
+      // discovery spawn — one that never resolves its `list()`
+      // — would pin the slot forever; bound the wait to
+      // `stopWaitMs` and force-release the slot on timeout so
+      // the supervisor is not stuck.
+      let timedOut = false;
+      try {
+        await Promise.race([
+          this.inflightStart.then(() => {
+            /* settled naturally; nothing to do */
+          }),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              timedOut = true;
+              resolve();
+            }, this.stopWaitMs);
+            timer.unref();
+          }),
+        ]);
+      } catch {
+        // start() will have cleaned up; nothing to release
+      }
+      void timedOut;
     }
+    if (this.pidSlot?.acquired) {
+      await releasePidSlot(this.pidFile).catch(() => {
+        /* best effort; a re-entrant acquire may need retry */
+      });
+      this.pidSlot = null;
+    }
+    this.stopping = false;
   }
 
   /** True after `stop()` has been called. */
@@ -237,6 +258,11 @@ export class Supervisor {
           return { closedByKey: true, closedByParent: false };
         }
       }
+      // No keyed match: do NOT fall back to the parent fallback,
+      // because that would close an unrelated live child of the
+      // parent. The caller signalled a specific toolUseId; if no
+      // reminted key or fallback key is alive, treat it as a no-op.
+      return { closedByKey: false, closedByParent: false };
     }
     const closed = this.store.closeSubagentOf(parentKey, at);
     return { closedByKey: false, closedByParent: closed };
