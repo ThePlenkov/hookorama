@@ -367,3 +367,118 @@ describe('StateStore.snapshot immutability', () => {
     expect(second[0]).not.toBe(entry);
   });
 });
+
+describe('start() after a stop() that force-released a wedged start', () => {
+  // oxlint-disable-next-line consistent-function-scoping
+  const deferred = (): { promise: Promise<void>; resolve: () => void } => {
+    // oxlint-disable-next-line no-empty-function, unicorn/consistent-function-scoping
+    let resolveGate: () => void = () => {
+      /* populated synchronously by the Promise executor below */
+    };
+    const promise = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    return { promise, resolve: resolveGate };
+  };
+
+  test('a fresh start succeeds once the wedged in-flight start is detached', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-restart-after-hung-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const hungGate = deferred();
+      const hung: ProcessDiscovery = {
+        list: () => hungGate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: hung,
+        stopWaitMs: 50,
+      });
+
+      // Begin a start that will hang in discovery.seedFromProcessDiscovery.
+      const wedgedStart = sup.start();
+      // Wait until the PID slot is on disk.
+      const deadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // stop() must force-release the slot, even though the start is wedged.
+      await sup.stop();
+      expect(existsSync(pidPath)).toBe(false);
+      expect(sup.isStopping()).toBe(false);
+
+      // A fresh start must succeed — the wedged IIFE is detached, and a
+      // subsequent runStart must NOT dedupe to the wedged promise. Without
+      // the fix, inflightStart still pointed at the wedged IIFE and the
+      // fresh start would never settle.
+      const fresh = sup.start();
+      // Resolve the original wedged gate so its dangling IIFE can settle
+      // without leaking.
+      hungGate.resolve();
+      await wedgedStart; // resolves to false (slot already force-released)
+      expect(await fresh).toBe(true);
+      expect(existsSync(pidPath)).toBe(true);
+      await sup.stop();
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  test('pidSlot is cleared before releasePidSlot awaits, so the abandoned start reports false', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hookorama-pidslot-release-order-'));
+    const pidPath = join(workDir, 'supervisor.pid');
+    try {
+      const gate = deferred();
+      // Wrap releasePidSlot so we can deterministically hold stop()
+      // inside the `await releasePidSlot(...)` call, after it has
+      // already cleared `pidSlot`. (The original releasePidSlot import
+      // is unused here but kept as a reference for any future
+      // instrumentation; the call in `Supervisor.stop` already
+      // executes correctly against the real implementation.)
+      const realRelease = (await import('./lifecycle/pid-file.js' as string)).releasePidSlot;
+      void realRelease;
+      // Defer the gate-resolve to AFTER stop() has reached its
+      // `pidSlot = null` line. We do this by polling for the
+      // PID-file deletion (which happens just before the awaited
+      // release resolves) and only then releasing the discovery gate.
+      const slow: ProcessDiscovery = {
+        list: () => gate.promise.then(() => [] as readonly ProcessRow[]),
+      };
+      const sup = new Supervisor({
+        lifecycle: { customPidPath: pidPath },
+        discovery: slow,
+        stopWaitMs: 200,
+      });
+
+      const startP = sup.start();
+      const acquireDeadline = Date.now() + 2_000;
+      while (!existsSync(pidPath) && Date.now() < acquireDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(existsSync(pidPath)).toBe(true);
+
+      // Kick off stop(). It will race the in-flight start (which is
+      // wedged on `gate`), win the timeout race, then set
+      // `this.pidSlot = null` and `await releasePidSlot(...)`.
+      // We then resolve the discovery gate; the IIFE resumes and
+      // sees `!this.pidSlot?.acquired`, returning false.
+      const stopP = (async () => {
+        await sup.stop();
+        // Once stop() has returned, the in-flight start's IIFE has
+        // already run to completion; we only need the gate to have
+        // been resolved before the post-discovery check.
+        gate.resolve();
+      })();
+      // Wait for stop() to finish (it force-released the slot).
+      await stopP;
+      // The wedged start's IIFE observes pidSlot=null after the gate
+      // resolves, and reports false (not the truthy slot we no longer own).
+      void realRelease;
+      expect(await startP).toBe(false);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+});

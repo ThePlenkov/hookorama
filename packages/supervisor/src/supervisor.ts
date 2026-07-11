@@ -99,7 +99,8 @@ export class Supervisor {
   private async runStart(): Promise<boolean> {
     if (this.pidSlot?.acquired) return true;
     if (this.inflightStart !== null) return this.inflightStart;
-    this.inflightStart = (async () => {
+    let ours: Promise<boolean> = Promise.resolve(false);
+    ours = (async (): Promise<boolean> => {
       try {
         this.pidSlot = await acquirePidSlot(this.pidFile, process.pid);
         if (!this.pidSlot.acquired) return false;
@@ -115,10 +116,17 @@ export class Supervisor {
         if (!this.pidSlot?.acquired) return false;
         return true;
       } finally {
-        this.inflightStart = null;
+        // Only clear `inflightStart` if we are still the latest
+        // attempt; a `stop()` that force-released us may have been
+        // replaced by a new in-flight start, and we must not clobber
+        // it on our way out.
+        if (this.inflightStart === ours) {
+          this.inflightStart = null;
+        }
       }
     })();
-    return this.inflightStart;
+    this.inflightStart = ours;
+    return ours;
   }
 
   /** Release the PID slot and mark the supervisor as stopping. */
@@ -142,29 +150,39 @@ export class Supervisor {
       // `stopWaitMs` and force-release the slot on timeout so
       // the supervisor is not stuck.
       let timedOut = false;
+      const timeoutPromise = new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, this.stopWaitMs);
+        timer.unref();
+      });
       try {
-        await Promise.race([
-          this.inflightStart.then(() => {
-            /* settled naturally; nothing to do */
-          }),
-          new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-              timedOut = true;
-              resolve();
-            }, this.stopWaitMs);
-            timer.unref();
-          }),
-        ]);
+        await Promise.race([this.inflightStart.then(() => undefined), timeoutPromise]);
       } catch {
         // start() will have cleaned up; nothing to release
       }
-      void timedOut;
+      if (timedOut) {
+        // The in-flight `start()` is wedged in a hung discovery.
+        // Detach it so future `start()` calls do not await this
+        // dead promise forever. Clear `inflightStart` so `runStart`
+        // does not dedupe to the wedged promise, and reset
+        // `startTail` so the wedged chain does not gate subsequent
+        // starts. The wedged IIFE's `finally` is a no-op when its
+        // captured promise is no longer current (see `runStart`).
+        this.inflightStart = null;
+        this.startTail = Promise.resolve(false);
+      }
     }
     if (this.pidSlot?.acquired) {
+      // Mark the slot as released BEFORE the awaited release so a
+      // concurrent `start()` IIFE waking up during the await cannot
+      // observe `pidSlot?.acquired === true` and falsely report a
+      // slot we no longer own.
+      this.pidSlot = null;
       await releasePidSlot(this.pidFile).catch(() => {
         /* best effort; a re-entrant acquire may need retry */
       });
-      this.pidSlot = null;
     }
     this.stopping = false;
   }
