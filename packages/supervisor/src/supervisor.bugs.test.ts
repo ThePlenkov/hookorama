@@ -288,7 +288,11 @@ describe('start/stop lifecycle race', () => {
       // Resolve the hung gate so the abandoned start() can finish
       // without leaking an unhandled rejection.
       hungGate.resolve();
-      await startP;
+      // The abandoned start() must report false once its discovery
+      // finally settles: stop() force-released the slot while it
+      // was hung, so by the time seedFromProcessDiscovery returns,
+      // pidSlot is null and the daemon no longer owns it.
+      expect(await startP).toBe(false);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

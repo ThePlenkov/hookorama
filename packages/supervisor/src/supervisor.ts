@@ -110,6 +110,9 @@ export class Supervisor {
           await releasePidSlot(this.pidFile);
           throw err;
         }
+        // A concurrent `stop()` may have force-released the slot while
+        // discovery was hung. Do not report a slot we no longer own.
+        if (!this.pidSlot?.acquired) return false;
         return true;
       } finally {
         this.inflightStart = null;
