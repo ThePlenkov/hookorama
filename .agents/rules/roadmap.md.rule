@@ -1,0 +1,44 @@
+---
+appliesTo: ROADMAP.md
+purpose: Ordered list of phases. Each phase row cites the ADRs it ships and the components it activates.
+owner: governance
+created: 2026-07-10
+---
+
+# Rule: ROADMAP.md
+
+`ROADMAP.md` is the **phase plan**. Each phase row has these
+columns:
+
+| Column | Source |
+|---|---|
+| Phase | `Phase N — <name>`. |
+| ADR(s) | `docs/adr/NNNN-<slug>.md` ids that ship in this phase. |
+| Component(s) | `SPEC.md` rows that this phase activates (i.e. the row's package becomes non‑empty). |
+| Status | `shipped` / `in progress` / `planned`. The row that ships the bootstrap (Phase 0) starts as `shipped`. |
+
+The doc must:
+
+- list phases in order, no gaps;
+- never describe a phase without citing at least one ADR or
+  marking it `planned` and saying which ADR will justify it;
+- stay under ~100 lines.
+
+A new phase row is added by the PR that introduces the first ADR
+for the phase; a phase is marked `shipped` in the same PR that
+closes the phase (the PR's last commit).
+
+## Template
+
+```markdown
+# ROADMAP.md — phases
+
+> Read AGENTS.md §3 before extending this document. Each phase row
+> is justified by at least one ADR in `docs/adr/`.
+
+| Phase | ADR(s) | Component(s) | Status |
+|-------|--------|--------------|--------|
+| Phase 0 — Bootstrap | (none — tooling) | (none — no components yet) | shipped |
+| Phase 1 — Supervisor | ADR NNNN | Supervisor | in progress / planned |
+| … | … | … | … |
+```

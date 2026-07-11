@@ -15,6 +15,7 @@
     "useUnknownInCatchVariables": true,
     "noPropertyAccessFromIndexSignature": true,
     "verbatimModuleSyntax": false,
+    "rewriteRelativeImportExtensions": true,
 
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,

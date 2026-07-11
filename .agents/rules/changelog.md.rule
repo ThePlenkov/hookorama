@@ -1,0 +1,52 @@
+---
+appliesTo: CHANGELOG.md
+purpose: Keep-a-changelog log of shipped phases, with PR links and ADR cites.
+owner: governance
+created: 2026-07-10
+---
+
+# Rule: CHANGELOG.md
+
+`CHANGELOG.md` follows [keep-a-changelog](https://keepachangelog.com/)
+style. Each version section is added by the PR that ships the
+phase.
+
+A version section must:
+
+- be in chronological order (newest at the top);
+- list the component(s) shipped (cite `SPEC.md` rows);
+- list the ADR(s) shipped (cite `docs/adr/NNNN-…`);
+- list the user‑visible changes under `### Added`,
+  `### Changed`, `### Deprecated`, `### Removed`, `### Fixed`,
+  `### Security` as relevant;
+- link to the PR (if known) and to the diff (compare‑view URL);
+- stay under ~120 lines total (older versions are kept terse).
+
+The first version (the bootstrap) is `0.1.0`. The next version,
+shipping the first real component, is `0.2.0`.
+
+## Template
+
+```markdown
+# Changelog
+
+All notable changes to this project are documented in this file.
+The format follows [keep-a-changelog](https://keepachangelog.com/).
+
+## [0.2.0] — YYYY-MM-DD
+
+PR: <URL or "not yet">
+
+### Added
+
+- Component: **Supervisor** (`SPEC.md` row). ADR: `docs/adr/NNNN-<slug>.md`.
+
+## [0.1.0] — 2026-07-10
+
+PR: <URL>
+
+### Added
+
+- Initial bootstrap: monorepo, governance, skill layer. See
+  `AGENTS.md` and `.agents/`.
+```

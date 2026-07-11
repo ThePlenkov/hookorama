@@ -1,0 +1,35 @@
+---
+# Codacy configuration for hookorama.
+#
+# Codacy's ESLint8 engine does not honour this repo's tsconfig.base
+# settings (noUncheckedIndexedAccess, exactOptionalPropertyTypes) and
+# runs the eslint-plugin-security heuristics that over-flag every fs
+# call with a dynamic path. Both classes of finding are false
+# positives:
+#
+# * The fs calls in packages/supervisor/src/lifecycle/pid-file.ts and
+#   packages/supervisor/src/process-discovery/index.ts only accept
+#   paths derived from process.env, os.homedir(), or a numeric PID
+#   validated by /^\d+$/. None accept arbitrary user input; the
+#   rule's threat model (user-controlled paths) does not apply.
+#
+# * The object accesses in
+#   packages/supervisor/src/process-discovery/index.ts are
+#   cols[idxName] / cols[idxPpid] / cols[idxPid] where idx* are
+#   integers from header.indexOf(...) on the wmic CSV header — not
+#   attacker-controlled keys.
+#
+# Codacy's `.codacy.yaml` does not reliably honour `disable_rules`
+# for these ESLint8 patterns; the only working suppression is
+# per-engine `exclude_paths`. We exclude the three offending files
+# from the eslint-8 engine only. SonarCloud, CodeFactor, CodeRabbit,
+# and the project's own `bun run lint` (oxlint) continue to scan
+# every line; no production source file is hidden from every
+# engine.
+
+engines:
+  eslint-8:
+    exclude_paths:
+      - 'packages/supervisor/src/lifecycle/pid-file.ts'
+      - 'packages/supervisor/src/process-discovery/index.ts'
+      - 'packages/supervisor/src/supervisor.bugs.test.ts'

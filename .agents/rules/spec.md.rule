@@ -1,0 +1,51 @@
+---
+appliesTo: SPEC.md
+purpose: Component index — one row per Hookorama component, pointing at the package, the ADRs that pin its shape, the rules and skills that govern it, and the memory facts it relies on.
+owner: governance
+created: 2026-07-10
+---
+
+# Rule: SPEC.md
+
+`SPEC.md` is a **component index**, not a monolithic product spec.
+It grows one row per component, **in the same PR that ships the
+component**. A row whose component has not shipped yet is forbidden;
+the doc must never speculate.
+
+A row has these columns, in this order:
+
+| Column | Source |
+|---|---|
+| Component | One short noun phrase (`Supervisor`, `Wire protocol`, `CLI`, …). |
+| Package(s) | `packages/<name>` paths that implement it. |
+| ADR(s) | One or more `docs/adr/NNNN-<slug>.md` ids. Listed in numeric order. |
+| Rule(s) | `.agents/rules/<name>.md.rule` ids that govern the component's `.md` files (excluding the SPEC rule itself). |
+| Skill(s) | `.agents/skills/<name>/SKILL.md` ids that touch the component (if any). |
+| Memory facts | `.agents/memory/facts/*.md` paths the component relies on (if any). |
+
+The doc must:
+
+- contain only the index table and a one‑paragraph mission link
+  back to `AGENTS.md` and `docs/adr/README.md`;
+- not contain a glossary, an FR/NFR list, persona write‑ups, or
+  architecture prose — those live in the cited ADRs and memory
+  entries;
+- stay under ~80 lines.
+
+A new row is added by the PR that introduces the first ADR for
+the component; removing a row requires an ADR that explicitly
+retires the component.
+
+## Template
+
+```markdown
+# SPEC.md — Hookorama component index
+
+> Read AGENTS.md and docs/adr/README.md before extending this
+> document. Rows are added by the PR that introduces the component;
+> pre‑written rows are forbidden.
+
+| Component | Package(s) | ADR(s) | Rule(s) | Skill(s) | Memory facts |
+|-----------|-----------|--------|---------|----------|--------------|
+| … | … | … | … | … | … |
+```
